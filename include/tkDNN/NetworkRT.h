@@ -7,6 +7,7 @@
 #include "Network.h"
 #include "Layer.h"
 #include "NvInfer.h"
+#include <memory>
 
 namespace tk { namespace dnn {
 
@@ -61,6 +62,7 @@ public:
 #if NV_TENSORRT_MAJOR >= 6  
     nvinfer1::IBuilderConfig *configRT;
 #endif
+    
     nvinfer1::ICudaEngine *engineRT;
     nvinfer1::IExecutionContext *contextRT;
 
@@ -110,6 +112,7 @@ public:
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Route *l);
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Flatten *l);
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Reshape *l);
+    nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Resize *l);
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Reorg *l);
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Region *l);
     nvinfer1::ILayer* convert_layer(nvinfer1::ITensor *input, Shortcut *l);

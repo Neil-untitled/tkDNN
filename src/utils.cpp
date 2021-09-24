@@ -35,14 +35,23 @@ void downloadWeights(const std::string& test_folder, const std::string& weights_
 void downloadWeightsifDoNotExist(const std::string& input_bin, const std::string& test_folder, const std::string& weights_url){
     if(!fileExist(input_bin.c_str())){
         std::string mkdir_cmd = "mkdir " + test_folder; 
-        std::string wget_cmd = "wget " + weights_url + " -O " + test_folder + "/weights.zip"; 
+        std::string wget_cmd = "curl " + weights_url + " --output " + test_folder + "/weights.zip";
+#ifdef __linux__
         std::string unzip_cmd = "unzip " + test_folder + "/weights.zip -d" + test_folder;
         std::string rm_cmd = "rm " + test_folder + "/weights.zip";
+
+#elif _WIN32
+
+        std::string unzip_cmd = "7z x " + test_folder + "/weights.zip -o" + test_folder;
+#endif 
         int err = 0;
         err = system(mkdir_cmd.c_str());
         err = system(wget_cmd.c_str());
         err = system(unzip_cmd.c_str());
+#ifdef __linux__
         err = system(rm_cmd.c_str());
+#endif
+
     }
 }
 
@@ -95,7 +104,7 @@ void printDeviceVector(int size, dnnType* vec_d, bool device){
         delete [] vec;
 }
 
-int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device, int limit) {
+int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device, int limit, bool verbose) {
 
     dnnType *data_h, *correct_h;
     const float eps = 0.02f;
@@ -114,6 +123,7 @@ int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device, int 
     }
     int diffs = 0;
     for(int i=0; i<size; i++) {
+        // data_h[i] = data_h[i]*1e-2;
         if(data_h[i] != data_h[i] || correct_h[i] != correct_h[i] || //nan control
            fabs(data_h[i] - correct_h[i]) > eps) {
             diffs += 1;
@@ -129,13 +139,15 @@ int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device, int 
         delete [] correct_h;
     }
 
-    std::cout<<" | ";
-    if(diffs == 0)
-        std::cout<<COL_GREENB<<"OK";
-    else
-        std::cout<<COL_REDB<<"Wrongs: "<<diffs;
+    if(verbose){
+        std::cout<<" | ";
+        if(diffs == 0)
+            std::cout<<COL_GREENB<<"OK";
+        else
+            std::cout<<COL_REDB<<"Wrongs: "<<diffs;
 
-    std::cout<<COL_END<<" ~"<<eps<<"\n";
+        std::cout<<COL_END<<" ~"<<eps<<"\n";
+    }
     return diffs;
 }
 
@@ -203,8 +215,12 @@ void getMemUsage(double& vm_usage_kb, double& resident_set_kb){
                >> O >> itrealvalue >> starttime >> vsize >> rss;
 
    stat_stream.close();
-
+#ifdef __linux__
    long page_size_kb = sysconf(_SC_PAGE_SIZE) / 1024; // in case x86-64 is configured to use 2MB pages
+#elif _WIN32
+ long page_size_kb = 4096/1024;
+#endif
+
    vm_usage_kb     = vsize / 1024.0;  
    resident_set_kb = rss * page_size_kb;
 }

@@ -30,7 +30,7 @@ public:
 		height_ones = (i_h + 2 * ph - (1 * (kh - 1) + 1)) / sh + 1;
 		width_ones = (i_w + 2 * pw - (1 * (kw - 1) + 1)) / sw + 1;
 		dim_ones = i_c * kh * kw * 1 * height_ones * width_ones;
-		std::cout<<i_c * o_c * kh * kw * 1<<"\n";
+		
 		checkCuda( cudaMalloc(&data_d, i_c * o_c * kh * kw * 1 * sizeof(dnnType)));
 		checkCuda( cudaMalloc(&bias2_d, o_c*sizeof(dnnType)));
 		checkCuda( cudaMalloc(&ones_d1, height_ones * width_ones * sizeof(dnnType)));
@@ -116,7 +116,7 @@ public:
 	}
 
 	virtual void serialize(void* buffer) override {
-		char *buf = reinterpret_cast<char*>(buffer);
+		char *buf = reinterpret_cast<char*>(buffer),*a=buf;
 		tk::dnn::writeBUF(buf, chunk_dim);
 		tk::dnn::writeBUF(buf, kh);
 		tk::dnn::writeBUF(buf, kw);
@@ -163,6 +163,7 @@ public:
         for(int i=0; i<dim_ones; i++)
     		tk::dnn::writeBUF(buf, aus[i]);
 		free(aus);
+		assert(buf == a + getSerializationSize());
 	}
 
 	cublasStatus_t stat; 

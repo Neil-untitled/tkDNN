@@ -6,10 +6,12 @@
 class ShortcutRT : public IPluginExt {
 
 public:
-	ShortcutRT(tk::dnn::dataDim_t bdim) {
+
+	ShortcutRT(tk::dnn::dataDim_t bdim, bool mul) {
 		this->bc = bdim.c;
 		this->bh = bdim.h;
 		this->bw = bdim.w;
+		this->mul = mul;
 	}
 
 	~ShortcutRT(){
@@ -28,6 +30,7 @@ public:
 		c = inputDims[0].d[0];
 		h = inputDims[0].d[1];
 		w = inputDims[0].d[2];
+
 	}*/
 
 	int initialize() override {
@@ -51,7 +54,7 @@ public:
 
 			checkCuda( cudaMemcpyAsync(dstData, srcData, batchSize*c*h*w*sizeof(dnnType), cudaMemcpyDeviceToDevice, stream));
 			for(int b=0; b < batchSize; ++b)
-				shortcutForward(srcDataBack + b*bc*bh*bw, dstData + b*c*h*w, 1, c, h, w, 1, 1, bc, bh, bw, 1, stream);
+				shortcutForward(srcDataBack + b*bc*bh*bw, dstData + b*c*h*w, 1, c, h, w, 1, 1, bc, bh, bw, 1, mul, stream);
 		}
 		else
 		{
@@ -69,18 +72,22 @@ public:
 
 
 	virtual size_t getSerializationSize() override {
-		return 6*sizeof(int) + sizeof(mDataType);
+		return 6*sizeof(int) + sizeof(bool) + sizeof(mDataType);
 	}
 
 	virtual void serialize(void* buffer) override {
-		char *buf = reinterpret_cast<char*>(buffer);
+		char *buf = reinterpret_cast<char*>(buffer),*a=buf;
 		tk::dnn::writeBUF(buf, bc);
 		tk::dnn::writeBUF(buf, bh);
 		tk::dnn::writeBUF(buf, bw);
+		tk::dnn::writeBUF(buf, mul);
 		tk::dnn::writeBUF(buf, c);
 		tk::dnn::writeBUF(buf, h);
 		tk::dnn::writeBUF(buf, w);
+
 		tk::dnn::writeBUF(buf, mDataType);
+		assert(buf == a + getSerializationSize());
+		
 	}
 
 	bool supportsFormat(nvinfer1::DataType type, nvinfer1::PluginFormat format) const override {
@@ -98,4 +105,5 @@ public:
 	int c, h, w;
 	int bc, bh, bw;
 	nvinfer1::DataType mDataType{nvinfer1::DataType::kFLOAT};
+	bool mul;
 };

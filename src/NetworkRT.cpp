@@ -591,6 +591,7 @@ NetworkRT::NetworkRT(Network *net, const char *name) {
         engineRT = builderRT->buildEngineWithConfig(*networkRT, *configRT);
 #else 
         engineRT = builderRT->buildCudaEngine(*networkRT);
+        //engineRT = std::shared_ptr<nvinfer1::ICudaEngine>(builderRT->buildCudaEngine(*networkRT));
 #endif
         if(engineRT == nullptr)
             FatalError("cloud not build cuda engine")
@@ -712,6 +713,8 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Layer *l) {
         return convert_layer(input, (Flatten*) l);
     if(type == LAYER_RESHAPE)
         return convert_layer(input, (Reshape*) l);
+    if(type == LAYER_RESIZE)
+        return convert_layer(input, (Resize*) l);
     if(type == LAYER_REORG)
         return convert_layer(input, (Reorg*) l);
     if(type == LAYER_REGION)
@@ -881,13 +884,13 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Activation *l) {
         
 #if NV_TENSORRT_MAJOR < 6                
         // plugin version
-        IPlugin *plugin = new ActivationLeakyRT();
+        IPlugin *plugin = new ActivationLeakyRT(l->slope);
         IPluginLayer *lRT = networkRT->addPlugin(&input, 1, *plugin);
         checkNULL(lRT);
         return lRT;
 #else 
         IActivationLayer *lRT = networkRT->addActivation(*input, ActivationType::kLEAKY_RELU);
-        lRT->setAlpha(0.1);
+        lRT->setAlpha(l->slope);
         checkNULL(lRT);
         return lRT;
 #endif
@@ -940,6 +943,7 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Route *l) {
     ITensor **tens = new ITensor*[l->layers_n];
     for(int i=0; i<l->layers_n; i++) {
         tens[i] = tensors[l->layers[i]];
+
 
 		/*
         for(int j=0; j<tens[i]->getDimensions().nbDims; j++) {
@@ -1024,10 +1028,20 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Flatten *l) {
 ILayer* NetworkRT::convert_layer(ITensor *input, Reshape *l) {
     // std::cout<<"convert Reshape\n";
 
-    l->output_dim.print();
     IPlugin *plugin = new ReshapeRT(l->output_dim);
     IPluginLayer *lRT = networkRT->addPlugin(&input, 1, *plugin);
     checkNULL(lRT);
+    return lRT;
+}
+
+ILayer* NetworkRT::convert_layer(ITensor *input, Resize *l) {
+    // std::cout<<"convert Resize\n";
+
+    IResizeLayer *lRT = networkRT->addResize(*input); //default is kNEAREST
+    checkNULL(lRT);
+    Dims d{};
+    lRT->setResizeMode(ResizeMode(l->mode));
+    lRT->setOutputDimensions(DimsCHW{l->output_dim.c, l->output_dim.h, l->output_dim.w});
     return lRT;
 }
 
@@ -1058,7 +1072,8 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Shortcut *l) {
     
     ITensor *back_tens = tensors[l->backLayer];
 
-    if(l->backLayer->output_dim.c == l->output_dim.c)
+
+    if(l->backLayer->output_dim.c == l->output_dim.c && !l->mul) 
     {
 		if(is_dla == true && l->backLayer->id >= startIndex)
 		{
@@ -1081,7 +1096,7 @@ ILayer* NetworkRT::convert_layer(ITensor *input, Shortcut *l) {
     else
     {
         // plugin version
-        IPluginExt *plugin = new ShortcutRT(l->backLayer->output_dim);
+        IPluginExt *plugin = new ShortcutRT(l->backLayer->output_dim, l->mul);
         ITensor **inputs = new ITensor*[2];
         inputs[0] = input;
         inputs[1] = back_tens; 
@@ -1140,7 +1155,7 @@ ILayer* NetworkRT::convert_layer(ITensor *input, DeformConv2d *l) {
     checkNULL(lRT);
     lRT->setName( ("Deformable" + std::to_string(l->id)).c_str() );
 	run_on_dla(lRT);
-    delete(inputs);
+    delete[](inputs);
     // batchnorm
     void *bias_b, *power_b, *mean_b, *variance_b, *scales_b;
     if(dtRT == DataType::kHALF) {
@@ -1214,6 +1229,7 @@ bool NetworkRT::deserialize(const char *filename) {
     pluginFactory = new PluginFactory();
     runtimeRT = createInferRuntime(loggerRT);
     engineRT = runtimeRT->deserializeCudaEngine(gieModelStream, size, (IPluginFactory *) pluginFactory);
+
     if (gieModelStream) delete [] gieModelStream;
 
     return true;
@@ -1307,19 +1323,21 @@ class RoutePluginV2Creator : public IPluginCreator
 REGISTER_TENSORRT_PLUGIN(RoutePluginV2Creator);
 
 IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialData, size_t serialLength) {
-    const char * buf = reinterpret_cast<const char*>(serialData);
+        const char * buf = reinterpret_cast<const char*>(serialData),*bufCheck = buf;
 
     std::string name(layerName);
     //std::cout<<name<<std::endl;
 
     if(name.find("ActivationLeaky") == 0) {
-        ActivationLeakyRT *a = new ActivationLeakyRT();
+        ActivationLeakyRT *a = new ActivationLeakyRT(readBUF<float>(buf));
         a->size = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return a;
     }
     if(name.find("ActivationMish") == 0) {
         ActivationMishRT *a = new ActivationMishRT();
         a->size = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return a;
     }
     if(name.find("ActivationLogistic") == 0) {
@@ -1328,27 +1346,33 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
         return a;
     }
     if(name.find("ActivationCReLU") == 0) {
-        ActivationReLUCeiling *a = new ActivationReLUCeiling(readBUF<float>(buf));
+        float activationReluTemp = readBUF<float>(buf);
+        ActivationReLUCeiling* a = new ActivationReLUCeiling(activationReluTemp);
         a->size = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return a;
     }
 
     if(name.find("Region") == 0) {
-        RegionRT *r = new RegionRT(readBUF<int>(buf),    //classes
-                                    readBUF<int>(buf),    //coords
-                                    readBUF<int>(buf));   //num
+        int classesTemp = readBUF<int>(buf);
+        int coordsTemp = readBUF<int>(buf);
+        int numTemp = readBUF<int>(buf);
+        RegionRT* r = new RegionRT(classesTemp, coordsTemp, numTemp);
 
         r->c = readBUF<int>(buf);
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 
     if(name.find("Reorg") == 0) {
-        ReorgRT *r = new ReorgRT(readBUF<int>(buf)); //stride
+        int strideTemp = readBUF<int>(buf);
+        ReorgRT *r = new ReorgRT(strideTemp);
         r->c = readBUF<int>(buf);
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 
@@ -1359,33 +1383,41 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
         bdim.w = readBUF<int>(buf);
         bdim.l = 1;
 
-        ShortcutRT *r = new ShortcutRT(bdim);
+        ShortcutRT *r = new ShortcutRT(bdim, readBUF<bool>(buf));
         r->c = readBUF<int>(buf);
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
         r->mDataType = readBUF<nvinfer1::DataType>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 
     if(name.find("Pooling") == 0) {
-        MaxPoolFixedSizeRT *r = new MaxPoolFixedSizeRT( readBUF<int>(buf), //c
-                                                        readBUF<int>(buf), //h
-                                                        readBUF<int>(buf), //w
-                                                        readBUF<int>(buf), //n
-                                                        readBUF<int>(buf), //strideH
-                                                        readBUF<int>(buf), //strideW
-                                                        readBUF<int>(buf), //winSize
-                                                        readBUF<int>(buf)); //padding
+
+        int cTemp = readBUF<int>(buf);
+        int hTemp = readBUF<int>(buf);
+        int wTemp = readBUF<int>(buf);
+        int nTemp = readBUF<int>(buf);
+        int strideHTemp = readBUF<int>(buf);
+        int strideWTemp = readBUF<int>(buf);
+        int winSizeTemp = readBUF<int>(buf);
+        int paddingTemp = readBUF<int>(buf);
+
+        MaxPoolFixedSizeRT* r = new MaxPoolFixedSizeRT(cTemp, hTemp, wTemp, nTemp, strideHTemp, strideWTemp, winSizeTemp, paddingTemp);
+        assert(buf == bufCheck + serialLength);
         return r;
     }
 
     if(name.find("Resize") == 0) {
-        ResizeLayerRT *r = new ResizeLayerRT(readBUF<int>(buf), //o_c
-                                            readBUF<int>(buf), //o_h
-                                            readBUF<int>(buf)); //o_w
+        int o_cTemp = readBUF<int>(buf);
+        int o_hTemp = readBUF<int>(buf);
+        int o_wTemp = readBUF<int>(buf);
+        ResizeLayerRT* r = new ResizeLayerRT(o_cTemp, o_hTemp, o_wTemp);
+
         r->i_c = readBUF<int>(buf);
         r->i_h = readBUF<int>(buf);
         r->i_w = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 
@@ -1396,6 +1428,7 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
         r->w = readBUF<int>(buf);
         r->rows = readBUF<int>(buf);
         r->cols = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 
@@ -1407,20 +1440,25 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
         new_dim.h = readBUF<int>(buf);
         new_dim.w = readBUF<int>(buf);
         ReshapeRT *r = new ReshapeRT(new_dim); 
+        assert(buf == bufCheck + serialLength);
         
         return r;
     } 
 
     if(name.find("Yolo") == 0) {
-        YoloRT *r = new YoloRT(readBUF<int>(buf),    //classes
-                                readBUF<int>(buf),   //num
-                                nullptr, //yolo
-                                readBUF<int>(buf), //n_masks
-                                readBUF<float>(buf), //scale_xy
-                                readBUF<float>(buf),  //nms_thresh 
-                                readBUF<int>(buf),  //nms_kind
-                                readBUF<int>(buf)  //new_coords
-                                );   
+
+        int classes_temp = readBUF<int>(buf);
+        int num_temp = readBUF<int>(buf);
+        int n_masks_temp = readBUF<int>(buf);
+        float scale_xy_temp = readBUF<float>(buf);
+        float nms_thresh_temp = readBUF<float>(buf);
+        int nms_kind_temp = readBUF<int>(buf);
+        int new_coords_temp = readBUF<int>(buf);
+
+       YoloRT *r = new YoloRT(classes_temp,num_temp,nullptr,n_masks_temp,scale_xy_temp,nms_thresh_temp,nms_kind_temp,new_coords_temp);  
+
+
+
         r->c = readBUF<int>(buf);
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
@@ -1437,20 +1475,25 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
 				tmp[j] = readBUF<char>(buf);
             r->classesNames[i] = std::string(tmp);
 		}
+        assert(buf == bufCheck + serialLength);
 
         yolos[n_yolos++] = r;
         return r;
     } 
     if(name.find("Upsample") == 0) {
-        UpsampleRT *r = new UpsampleRT(readBUF<int>(buf)); //stride
+        int strideTemp = readBUF<int>(buf);
+        UpsampleRT* r = new UpsampleRT(strideTemp);
         r->c = readBUF<int>(buf);
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     }
 
     /*if(name.find("Route") == 0) {
-        RouteRT *r = new RouteRT(readBUF<int>(buf),readBUF<int>(buf));
+        int groupsTemp = readBUF<int>(buf);
+        int group_idTemp = readBUF<int>(buf);
+        RouteRT* r = new RouteRT(groupsTemp, group_idTemp);
         r->in = readBUF<int>(buf);
         for(int i=0; i<RouteRT::MAX_INPUTS; i++)
             r->c_in[i] = readBUF<int>(buf);
@@ -1458,16 +1501,29 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
         r->h = readBUF<int>(buf);
         r->w = readBUF<int>(buf);
 		r->mDataType = readBUF<nvinfer1::DataType>(buf);
+        assert(buf == bufCheck + serialLength);
         return r;
     }*/
 
     if(name.find("Deformable") == 0) {
-        DeformableConvRT *r = new DeformableConvRT(readBUF<int>(buf), readBUF<int>(buf), readBUF<int>(buf),
-                                                    readBUF<int>(buf), readBUF<int>(buf), readBUF<int>(buf),
-                                                    readBUF<int>(buf), readBUF<int>(buf),
-                                                    readBUF<int>(buf),readBUF<int>(buf),readBUF<int>(buf),readBUF<int>(buf),
-                                                    readBUF<int>(buf),readBUF<int>(buf),readBUF<int>(buf),readBUF<int>(buf),
-                                                    nullptr); 
+        int chuck_dimTemp = readBUF<int>(buf);
+        int khTemp = readBUF<int>(buf);
+        int kwTemp = readBUF<int>(buf);
+        int shTemp = readBUF<int>(buf);
+        int swTemp = readBUF<int>(buf);
+        int phTemp = readBUF<int>(buf);
+        int pwTemp = readBUF<int>(buf);
+        int deformableGroupTemp = readBUF<int>(buf);
+        int i_nTemp = readBUF<int>(buf);
+        int i_cTemp = readBUF<int>(buf);
+        int i_hTemp = readBUF<int>(buf);
+        int i_wTemp = readBUF<int>(buf);
+        int o_nTemp = readBUF<int>(buf);
+        int o_cTemp = readBUF<int>(buf);
+        int o_hTemp = readBUF<int>(buf);
+        int o_wTemp = readBUF<int>(buf);
+
+        DeformableConvRT* r = new DeformableConvRT(chuck_dimTemp, khTemp, kwTemp, shTemp, swTemp, phTemp, pwTemp, deformableGroupTemp, i_nTemp, i_cTemp, i_hTemp, i_wTemp, o_nTemp, o_cTemp, o_hTemp, o_wTemp, nullptr);
         dnnType *aus = new dnnType[r->chunk_dim*2];
         for(int i=0; i<r->chunk_dim*2; i++)
     		aus[i] = readBUF<dnnType>(buf);
@@ -1498,6 +1554,7 @@ IPlugin* PluginFactory::createPlugin(const char* layerName, const void* serialDa
     		aus[i] = readBUF<dnnType>(buf);
 		checkCuda( cudaMemcpy(r->ones_d2, aus, sizeof(dnnType)*r->dim_ones, cudaMemcpyHostToDevice) );
         free(aus);
+        assert(buf == bufCheck + serialLength);
         return r;
     } 
 

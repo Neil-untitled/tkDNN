@@ -29,6 +29,7 @@ public:
 		return DimsCHW{out_c/groups, inputs[0].d[1], inputs[0].d[2]};
 	}
 
+
 	/*void configure(const Dims* inputDims, int nbInputs, const Dims* outputDims, int nbOutputs, int maxBatchSize) override {
 		in = nbInputs;
 		c = 0;
@@ -54,6 +55,7 @@ public:
 	}
 
 	virtual int enqueue(int batchSize, const void*const * inputs, void** outputs, void* workspace, cudaStream_t stream) override {
+
 	
 		if(mDataType == nvinfer1::DataType::kFLOAT)
 		{
@@ -111,7 +113,7 @@ public:
 	}
 
 	virtual void serialize(void* buffer) const override {
-		char *buf = reinterpret_cast<char*>(buffer);
+		char *buf = reinterpret_cast<char*>(buffer),*a=buf;
 		tk::dnn::writeBUF(buf, groups);
 		tk::dnn::writeBUF(buf, group_id);
 		tk::dnn::writeBUF(buf, in);
@@ -122,6 +124,7 @@ public:
 		tk::dnn::writeBUF(buf, h);
 		tk::dnn::writeBUF(buf, w);
 		tk::dnn::writeBUF(buf, mDataType);
+		assert(buf == a + getSerializationSize());
 	}
 
 	bool supportsFormatCombination(int pos, const PluginTensorDesc* inOut, int nbInputs, int nbOutputs) const override

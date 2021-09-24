@@ -51,6 +51,7 @@ public:
     bool addLayer(Layer *l);
     void print();
     const char *getNetworkRTName(const char *network_name);
+    void adjustFeatureMapSizeWithShortcuts();
 
     cudnnDataType_t dataType;
     cudnnTensorFormat_t tensorFormat;

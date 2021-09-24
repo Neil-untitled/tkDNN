@@ -13,8 +13,14 @@
 #include <cuda_fp16.h>
 #include <cudnn.h>
 
+
+#ifdef __linux__
 #include <unistd.h>
+
+#endif
+
 #include <ios>
+#include <chrono>
 
 
 #define dnnType float
@@ -40,6 +46,7 @@
 #define TKDNN_VERBOSE 0
 
 // Simple Timer 
+#ifdef __linux__
 #define TKDNN_TSTART timespec start, end;                               \
                     clock_gettime(CLOCK_MONOTONIC, &start);            
 
@@ -49,6 +56,14 @@
     if(show) std::cout<<col<<"Time:"<<std::setw(16)<<t_ns<<" ms\n"<<COL_END; 
 
 #define TKDNN_TSTOP TKDNN_TSTOP_C(COL_CYANB, TKDNN_VERBOSE)
+#elif _WIN32
+#define TKDNN_TSTART auto start = std::chrono::high_resolution_clock::now();
+#define TKDNN_TSTOP auto stop = std::chrono::high_resolution_clock::now(); \
+std::chrono::duration<double> duration = stop -start;                      \
+auto time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration);\
+double t_ns = time_ms.count();
+#endif
+
 
 /********************************************************
  * Prints the error message, and exits
@@ -107,7 +122,7 @@ bool fileExist(const char *fname);
 void downloadWeights(const std::string& test_folder, const std::string& weights_url);
 void downloadWeightsifDoNotExist(const std::string& input_bin, const std::string& test_folder, const std::string& weights_url);
 void readBinaryFile(std::string fname, int size, dnnType** data_h, dnnType** data_d, int seek = 0);
-int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device = true, int limit = 10);
+int checkResult(int size, dnnType *data_d, dnnType *correct_d, bool device = true, int limit = 10, bool verbose=true);
 void printDeviceVector(int size, dnnType* vec_d, bool device = true);
 float getColor(const int c, const int x, const int max);
 void resize(int size, dnnType **data);
