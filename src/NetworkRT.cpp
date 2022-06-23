@@ -238,7 +238,7 @@ std::map<std::pair<int, int>, int> NetworkRT::getOutputPair(Network *net, int st
 			}
 		}
 
-		if(l->final) {
+		if(l->final || l->id == net->num_layers-1) {
 			dataDim_t outdim = l->output_dim;
 			int size = outdim.c * outdim.h * outdim.w;
 			output_size_map.insert(std::make_pair(std::make_pair(l->id, -1), size));	
